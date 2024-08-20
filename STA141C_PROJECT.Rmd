@@ -1,0 +1,1066 @@
+---
+title: "airbnb_explore_hannah"
+author: "Hannah Wen"
+date: "2024-05-02"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# NOTE: Run all chunks in order. 
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(corrplot)
+library(caret)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(ranger)
+library(fastDummies)
+library(glmnet)
+library(corrplot)
+library(gt)
+library(xgboost)
+library(Ckmeans.1d.dp)
+library(readr)
+#install.packages('osmdata')
+#install.packages('sf')
+library(osmdata)
+library(sf)
+library(tigris)
+library(leaflet)
+library(tidycensus)
+```
+
+```{r}
+# will need to change pathways for csvs. 
+listings = read_csv("/Users/hannahwen/Desktop/STA141C/STA141C_FINAL_PROJECT/Airbnb_Open_Data.csv")
+listings
+```
+# clean typos, remove dollar signs, fill in NA values, 
+
+```{r}
+listings %>% select(neighbourhood) %>% distinct()
+```
+```{r}
+listings %>% select(room_type) %>% distinct()
+```
+
+
+```{r}
+listings %>% select(neighbourhood_group) %>% table()
+```
+```{r}
+listings %>% filter(neighbourhood_group == 'brookln' | neighbourhood_group == 'manhatan')
+```
+```{r}
+listings
+```
+```{r}
+new_listings = listings %>% select(-c(id, host_id, host_name, host_identity_verified, 'country code', country, license))
+new_listings
+```
+
+```{r}
+# filling na values with a string 
+cleaned_listings = new_listings %>% mutate(house_rules = ifelse(is.na(house_rules), "N/A", house_rules))
+cleaned_listings = cleaned_listings %>% mutate(NAME = ifelse(is.na(NAME), "N/A", NAME))
+
+cleaned_listings 
+```
+
+```{r}
+cleaner_listings = cleaned_listings %>% na.omit() # omitting all rows with any na value 
+# converting prices into pure numeric values 
+cleaner_listings$price = gsub("[$,]", "", cleaner_listings$price) %>% as.numeric()
+cleaner_listings$service_fee = gsub("[$,]", "", cleaner_listings$service_fee) %>% as.numeric()
+cleaner_listings
+```
+
+```{r}
+cleaner_listings$neighbourhood_group[13] = "Brooklyn" # fixing typo 
+cleaner_listings
+```
+# Removing false values 
+
+
+
+
+```{r}
+# write csv , I commented out all the write csvs in this RMD
+#write.csv(cleaner_listings, "/Users/hannahwen/Desktop/STA141C/STA141C_FINAL_PROJECT/cleaned_airbnb_.csv")
+```
+
+# ADDITIONAL CLEANING
+
+```{r}
+airbnb = read_csv("/Users/hannahwen/Desktop/STA141C/STA141C_FINAL_PROJECT/STA141C_PROJECT/cleaned_airbnb_.csv")
+airbnb
+```
+
+# Examining house rules variable and creating new variables out of it. 
+
+```{r}
+airbnb = airbnb %>% rename(id = "...1") # renaming id column 
+airbnb$last_review_year = as.numeric(substr(airbnb$last_review, nchar(airbnb$last_review) - 3, nchar(airbnb$last_review)))
+airbnb$no_smoking = grepl("smoking|smoke", airbnb$house_rules) # create columns which identify house rules which mention smoking 
+
+airbnb$house_rules = airbnb$house_rules %>% tolower() 
+airbnb$no_rules = airbnb$house_rules=="n/a" # column marking whether there was a house rules section or not 
+table(airbnb$no_rules)
+
+```
+
+```{r}
+colnames(airbnb)
+```
+
+# looking at minimum nights 
+```{r}
+
+summary(airbnb$minimum_nights) # inconsistency in data 
+airbnb %>% filter(minimum_nights <=0)
+# removing values that don't make sense 
+airbnb = airbnb %>% filter(minimum_nights > 0)
+```
+
+```{r}
+
+summary(airbnb$minimum_nights)
+```
+
+# 365 clean 
+```{r}
+# removing impossible values 
+airbnb%>% filter(availability_365<0)
+airbnb = airbnb %>% filter(availability_365>=0)
+```
+
+
+
+# Last review year
+```{r}
+table(airbnb$last_review_year)
+airbnb %>% group_by(last_review_year, neighbourhood_group) %>% summarise(mean_price = mean(price)) %>% 
+  spread(key = last_review_year, value = mean_price)
+```
+```{r}
+airbnb = airbnb %>% filter(last_review_year <= 2023)
+```
+
+```{r}
+airbnb %>% group_by(last_review_year, neighbourhood_group) %>% summarise(mean_price = mean(price)) %>% 
+  spread(key = last_review_year, value = mean_price)
+```
+
+# Creating number of bedroom variable and examining it
+
+```{r}
+airbnb$NAME = tolower(airbnb$NAME)
+
+extract_number_before_string <- function(description) {
+  # Regular expression pattern to match the number (integer or decimal) before the specified string
+  pattern <- paste0("(?<=\\b)\\d*\\.?\\d+(?=\\s*(bedroom|br|bdrm?|room|rm|bed|bd|-bedroom|-br|-bdrm?|-rm|-bed)\\b)")
+  
+  # Find matches in the description
+  matches <- gregexpr(pattern, description, perl = TRUE)
+  
+  # Extract the numeric values from matches
+  numbers <- regmatches(description, matches)
+  
+  # Convert numeric values to numeric type to handle both integers and decimals
+  numbers <- as.numeric(unlist(numbers))
+  
+  # Return the first numeric value found
+  if (length(numbers) > 0) {
+    return(numbers[1])
+  } else {
+    return(1)  # Return 1 if no numeric value is found
+  }
+}
+
+# Example usage:
+description <- "spacious brooklyn loft - 2.5-bedroom"
+string <- "bedroom"
+print(extract_number_before_string(description))  # Output: 2.5
+
+```
+
+```{r}
+airbnb$bedrooms = as.numeric(sapply(airbnb$NAME, extract_number_before_string))
+```
+
+
+
+
+```{r}
+cor(airbnb$bedrooms, airbnb$price)
+```
+
+
+```{r}
+airbnb %>% group_by(bedrooms) %>% summarise(mean(price))
+```
+```{r}
+table(airbnb$bedrooms)
+table(airbnb$bedrooms) %>% prop.table()
+```
+
+# finding outliers and fixing possibly wrong classifications 
+```{r}
+airbnb$bedrooms[airbnb$bedrooms < 1] = 1
+
+airbnb %>% filter(bedrooms >=6)
+airbnb[7489, "bedrooms"] = 1
+
+airbnb[29434, "bedrooms"] = 1
+airbnb[29436, "bedrooms"] = 1
+airbnb[29438, "bedrooms"] = 1
+airbnb[29439, "bedrooms"] = 1
+
+airbnb[35623, "bedrooms"] = 1
+airbnb[42334, "bedrooms"] = 1
+airbnb[51841, "bedrooms"] = 1
+airbnb[68244, "bedrooms"] = 1
+airbnb[81933, "bedrooms"] = 1
+airbnb[81935, "bedrooms"] = 1
+airbnb[81937, "bedrooms"] = 1
+airbnb[81938, "bedrooms"] = 1
+airbnb[81938, "bedrooms"] = 1
+
+```
+
+It's noticed that there are entries named "bedroom 7 bed a" which were interpreted as having 7 bedrooms but appears actually be a shared room. 
+
+```{r}
+table(airbnb$bedrooms)
+```
+
+Now I will ensure that there aren't more mistakes of assining 6 bedrooms to a listing that is a "bedroom in 6 bed". 
+```{r}
+airbnb$bedrooms[airbnb$room_type == "Shared"] <- 1
+airbnb$bedrooms[airbnb$room_type == "Private room"] <- 1
+airbnb$bedrooms = round(airbnb$bedrooms)
+```
+
+```{r}
+# write.csv(airbnb, "/Users/hannahwen/Desktop/STA141C/STA141C_FINAL_PROJECT/airbnb_new.csv", row.names = FALSE)
+airbnb
+```
+
+
+
+# data analysis portion 
+```{r}
+airbnb = read_csv("/Users/hannahwen/Desktop/STA141C/STA141C_FINAL_PROJECT/airbnb_new.csv")
+airbnb
+```
+```{r}
+airbnb
+```
+# looking at price 
+```{r}
+summary(airbnb$price)
+
+```
+```{r}
+ggplot(airbnb, aes(x = price)) +
+  geom_density(fill = "grey", alpha = 0.5) +
+  labs(title = "Density Plot of Price",
+       x = "Price",
+       y = "Density") +
+  theme_minimal()
+```
+
+# looking at neighbourhood 
+```{r}
+ggplot(data = airbnb, aes(x = neighbourhood_group, fill=neighbourhood_group)) + geom_bar() + labs() + 
+  geom_text(stat = 'count', aes(label = after_stat(count)), vjust = -0.5) + theme_minimal() +
+  labs(title = "Neighborhood Group Distribution", fill = "Neighborhood") + xlab("Neighborhood Group") + ylab("Count") 
+```
+
+```{r}
+table(airbnb$neighbourhood_group) %>% prop.table()
+```
+
+# looking at minimum nights 
+
+```{r}
+summary(airbnb$minimum_nights)
+```
+
+```{r}
+airbnb %>% group_by(room_type) %>% summarise("Median Minimum Nights" = median(minimum_nights))%>% 
+  gt() %>% cols_label(room_type = "Room Type")
+```
+
+```{r}
+airbnb %>% 
+        group_by(neighbourhood_group) %>% 
+        summarise("Median Minimum Nights" = median(minimum_nights)) %>% 
+  gt() %>% cols_label(neighbourhood_group = "Neighborhood Group")
+```
+
+```{r}
+airbnb %>% group_by(neighbourhood_group) %>% summarise(mean(minimum_nights))
+```
+# room type 
+```{r}
+ggplot(data = airbnb, aes(x = room_type, fill=room_type)) + geom_bar() + labs() + geom_text(stat = 'count', aes(label = after_stat(count)), vjust = -0.5) + theme_minimal() +
+  labs(title = "Room Type Distribution", fill = "Room Type") + xlab("Room Type") + ylab("Count") 
+```
+
+```{r}
+table(airbnb$room_type) %>% prop.table()
+```
+```{r}
+table(airbnb$room_type, airbnb$neighbourhood_group) %>% prop.table(margin = 2)
+```
+
+# availibility 365
+```{r}
+summary(airbnb$availability_365)
+```
+
+```{r}
+airbnb %>% group_by(room_type) %>% summarise("Mean Future Availibility"=mean(availability_365))%>% 
+  gt() %>% cols_label(room_type = "Room Type")
+
+```
+
+```{r}
+airbnb %>% group_by(neighbourhood_group) %>% summarise("Mean Future Availibility"=mean(availability_365))%>% 
+  gt() %>% cols_label(neighbourhood_group = "Neighborhood Group")
+
+```
+
+# construction year 
+```{r}
+table(airbnb$construction_year)
+```
+
+# Examining house rules, cancellation policy, instant_bookable, number of reviews, last review, reviews per month, review rate number, calculated host listing count 
+
+# Cancellation policy Examination 
+
+```{r}
+table(airbnb$cancellation_policy)
+# frequency table of cancellation policy and instant bookable 
+table(airbnb$cancellation_policy, airbnb$instant_bookable)
+table(airbnb$cancellation_policy, airbnb$neighbourhood_group) %>% prop.table(margin = 2)
+table(airbnb$cancellation_policy, airbnb$no_smoking) %>% prop.table(margin = 2)
+table(airbnb$cancellation_policy, airbnb$room_type) %>% prop.table(margin = 2)
+```
+
+```{r}
+ggplot(data = airbnb, aes(x =neighbourhood_group, fill=cancellation_policy)) + geom_bar(position = "fill") + labs()  + theme_minimal() +
+  labs(title = "Cancellation Policies Among Different Neighborhood Groups", fill = "Cancellation Policy Flexibility") + xlab("Neighborhood Group") + ylab("Percent") +
+  theme(legend.position = "bottom") +  coord_fixed(ratio = 3.5)
+```
+
+# Examining the no smoking variable 
+```{r}
+table(airbnb$no_smoking) %>% prop.table()
+table(airbnb$no_smoking, airbnb$neighbourhood_group) %>% prop.table(margin = 2)
+table(airbnb$no_smoking, airbnb$cancellation_policy) %>% prop.table(margin = 2)
+airbnb %>% group_by(no_smoking) %>% summarise(mean_price = mean(price))
+```
+# Looking at the no_rules category 
+```{r}
+table(airbnb$no_rules) %>% prop.table()
+table(airbnb$no_rules, airbnb$neighbourhood_group) %>% prop.table(margin = 2)
+table(airbnb$no_rules, airbnb$cancellation_policy) %>% prop.table(margin = 2)
+airbnb %>% group_by(no_rules) %>% summarise(mean_price = mean(price))
+```
+
+
+# Mean prices according to cancellation policy and across different neighbourhoodd groups
+
+```{r}
+
+airbnb %>% group_by(cancellation_policy, neighbourhood_group) %>% summarise(mean_price = mean(price)) %>% 
+  spread(key = cancellation_policy, value = mean_price) %>% 
+  mutate(across(where(is.numeric), round, digits = 2)) %>% gt() %>% 
+  cols_label(neighbourhood_group = "Neighbourhood Group", flexible = "Flexible", moderate = "Moderate", 
+             strict = "Strict")
+airbnb %>% group_by(cancellation_policy) %>% summarise(mean(price))
+airbnb %>% group_by(neighbourhood_group) %>% summarise(mean(price))
+```
+
+```{r}
+ggplot(data = airbnb, aes(x = neighbourhood_group, y = price, color = cancellation_policy)) + geom_boxplot() + theme_minimal() +
+  scale_fill_manual(values = c("flexible" = "blue", "moderate" = "green", "strict" = "red")) + 
+  labs(x = "Neighbourhood Group", y = "Price", color = "Cancellation Policy", title = "Price Distribution by Cancellation Policy and Neighbourhood Group")
+
+```
+
+
+```{r}
+airbnb %>% group_by(instant_bookable, neighbourhood_group) %>% summarise(mean_price = mean(price)) %>% 
+  spread(key = instant_bookable, value = mean_price)
+airbnb %>% group_by(instant_bookable) %>% summarise(mean(price))
+```
+
+```{r}
+ggplot(data = airbnb, aes(x = neighbourhood_group, y = price, color = instant_bookable)) + geom_boxplot() + theme_minimal()+
+  scale_fill_manual(values = c("flexible" = "blue", "moderate" = "green", "strict" = "red")) + 
+  labs(x = "Neighbourhood Group", y = "Price", color = "Instant Booking Available", title = "Price Distribution by Ability to Book Instantly and Neighbourhood Group")
+```
+
+```{r}
+# ggplot(data = airbnb, aes(x = reviews_per_month, y = number_of_reviews, color = neighbourhood_group)) + geom_point() + theme_minimal()
+cor(airbnb$reviews_per_month, airbnb$number_of_reviews)
+cor(airbnb$reviews_per_month, airbnb$review_rate_number)
+cor(airbnb$number_of_reviews, airbnb$review_rate_number)
+cor(airbnb$reviews_per_month, airbnb$calculated_host_listings_count)
+cor(airbnb$number_of_reviews, airbnb$calculated_host_listings_count)
+```
+
+```{r}
+ggplot(data = airbnb, aes(x = number_of_reviews, y = price), color = neighbourhood) + geom_point() +facet_wrap(~ neighbourhood_group) + theme_minimal()
+
+```
+
+
+```{r}
+colMeans(airbnb %>% dplyr::select(c(reviews_per_month, number_of_reviews, review_rate_number, calculated_host_listings_count)))
+```
+```{r}
+table(airbnb$review_rate_number) %>% prop.table() # distribution of ratings
+table(airbnb$review_rate_number, airbnb$neighbourhood_group) %>% prop.table(margin = 2) # distribution of ratings over neighbourhood group
+table(airbnb$review_rate_number, airbnb$cancellation_policy) %>% prop.table(margin = 2) # distribution of ratings over cancellation policy 
+table(airbnb$review_rate_number, airbnb$no_rules) %>% prop.table(margin = 2) # distribution of ratings over no rules 
+median(airbnb$review_rate_number)
+```
+```{r}
+summary(airbnb$calculated_host_listings_count)
+```
+
+```{r}
+
+airbnb$review_rate_number_factorized = as.factor(airbnb$review_rate_number)
+airbnb %>% group_by(review_rate_number_factorized, neighbourhood_group) %>% summarise(mean_price = mean(price)) %>% 
+  spread(key = review_rate_number_factorized, value = mean_price) %>% 
+  mutate(across(where(is.numeric), round, digits = 2)) %>%
+  gt(caption = "Mean Prices of Each Rating Depending on Neighborhood Group") %>% 
+  cols_label(neighbourhood_group = "Neighborhood Group")
+
+```
+
+
+
+```{r}
+airbnb$review_rate_number_factorized = as.factor(airbnb$review_rate_number)
+airbnb %>% group_by(review_rate_number_factorized) %>% summarise(mean_price = mean(price)) %>% 
+  spread(key = review_rate_number_factorized, value = mean_price) %>% 
+  mutate(across(where(is.numeric), round, digits = 2)) %>%
+  gt(caption = "Mean Prices of Each Rating") 
+```
+
+
+
+```{r}
+table(airbnb$bedrooms)
+table(airbnb$bedrooms) %>% prop.table()
+```
+```{r}
+airbnb %>% group_by(bedrooms) %>% summarise(mean_price = mean(price)) %>% 
+  mutate(across(where(is.numeric), round, digits = 2)) %>%
+  spread(key = bedrooms, value = mean_price) %>% gt(caption = "Mean Prices According to Number of Bedrooms") 
+```
+
+```{r}
+# making number of bedrooms a factor
+airbnb$bedrooms = as.factor(airbnb$bedrooms)
+```
+
+# examination on construction year
+```{r}
+airbnb %>% group_by(construction_year) %>% summarise(mean_price = mean(price))
+```
+
+```{r}
+table(airbnb$construction_year) 
+```
+
+```{r}
+ggplot(data = airbnb, aes(x =construction_year, fill=as.factor(construction_year))) + geom_bar() + labs()  + theme_minimal() +
+  labs(title = "Construction Year Distribution", fill = "Construction Year") + xlab("Construction Year") + ylab("Count") 
+```
+
+
+```{r}
+summary(airbnb$construction_year)
+```
+```{r}
+airbnb %>% group_by(room_type) %>% summarise("Median Year"=median(construction_year))%>% 
+  gt() %>% cols_label(room_type = "Room Type")
+```
+
+```{r}
+airbnb %>% group_by(neighbourhood_group) %>% summarise("Median Year"=median(construction_year))%>% 
+  gt() %>% cols_label(neighbourhood_group = "Neighborhood Group")
+```
+
+```{r}
+airbnb_cor = airbnb %>% dplyr::select(-c(id, NAME, neighbourhood, neighbourhood_group, instant_bookable, 
+        cancellation_policy, room_type, service_fee, house_rules, no_smoking, no_rules, review_rate_number_factorized,
+        last_review))
+airbnb_cor$bedrooms = as.numeric(airbnb_cor$bedrooms)
+correlation_matrix = cor(airbnb_cor)
+corrplot(correlation_matrix, method = "color", tl.cex = 0.8)
+
+```
+
+
+```{r}
+airbnb_cor
+```
+
+# clustering
+
+```{r}
+cluster_data <- airbnb[, c("lat", "long", "price")]
+
+# Scaling the data - important for clustering
+cluster_data_scaled <- scale(cluster_data)
+set.seed(123)  # For reproducibility
+kmeans_result <- kmeans(cluster_data_scaled, centers = 5, nstart = 25)
+
+# Adding cluster labels to the original data
+airbnb$cluster <- as.factor(kmeans_result$cluster)
+
+# Summary statistics for each cluster
+library(dplyr)
+cluster_summary <- airbnb %>%
+  group_by(cluster) %>%
+  summarise(
+    avg_price = mean(price, na.rm = TRUE),
+    median_price = median(price, na.rm = TRUE),
+    min_price = min(price, na.rm = TRUE),
+    max_price = max(price, na.rm = TRUE),
+    count = n(),
+    avg_lat = mean(lat),
+    avg_long = mean(long)
+  )
+print(cluster_summary)
+
+ggplot(airbnb, aes(x = long, y = lat, color = factor(cluster))) +
+  geom_point(alpha = 0.6) +
+  scale_color_manual(values = c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd")) +
+  labs(title = "Airbnb Clusters Based on Location and Price",
+       x = "Longitude",
+       y = "Latitude",
+       color = "Cluster") +
+  theme_minimal()
+```
+# Map visualizations (WARNING: WILL LAG)
+
+```{r}
+# Filter for valid latitude and longitude values
+data <- data %>%
+  filter(!is.na(lat) & !is.na(long))
+
+# Define colors for different room types
+colors <- colorFactor(palette = "viridis", domain = data$room_type)
+
+# Get all county boundaries in New York State
+ny_counties <- counties(state = "NY", cb = TRUE)
+
+# Filter for the five boroughs of NYC
+nyc_boroughs <- ny_counties %>%
+  filter(NAME %in% c("New York", "Kings", "Queens", "Bronx", "Richmond"))
+
+# Ensure the CRS matches
+nyc_boroughs <- st_transform(nyc_boroughs, crs = 4326)
+
+# Define colors for different room types
+colors <- colorFactor(palette = "viridis", domain = data$room_type)
+
+# Create an interactive map
+map <- leaflet(data) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(
+    ~long, ~lat,
+    color = ~colors(room_type),
+    stroke = FALSE,
+    fillOpacity = 0.6,
+    radius = 3,
+    popup = ~paste(
+      "<strong>Room Type:</strong>", room_type, "<br>",
+      "<strong>Price:</strong>", price, "<br>",
+      "<strong>Minimum Nights:</strong>", minimum_nights, "<br>",
+      "<strong>Service Fee:</strong>", service_fee, "<br>",
+      "<strong>Availability (365):</strong>", availability_365
+    )
+  ) %>%
+  addPolygons(
+    data = nyc_boroughs,
+    fillColor = NA, color = "black", weight = 2,
+    smoothFactor = 0.5, opacity = 1.0, fillOpacity = 0,
+    label = ~NAME
+  ) %>%
+  addLegend(
+    "bottomright", pal = colors, values = ~room_type,
+    title = "Room Type",
+    opacity = 1
+  )
+
+# Print the map
+map
+
+```
+
+```{r}
+data <- data %>%
+  filter(!is.na(lat) & !is.na(long) & !is.na(price))
+
+# Convert Airbnb data to an sf object
+airbnb_sf <- st_as_sf(data, coords = c("long", "lat"), crs = 4326)
+
+# Get all county boundaries in New York State
+ny_counties <- counties(state = "NY", cb = TRUE)
+
+# Filter for the five boroughs of NYC
+nyc_boroughs <- ny_counties %>%
+  filter(NAME %in% c("New York", "Kings", "Queens", "Bronx", "Richmond"))
+
+# Ensure the CRS matches
+nyc_boroughs <- st_transform(nyc_boroughs, crs = st_crs(airbnb_sf))
+
+# Spatial join to assign boroughs to Airbnb listings
+airbnb_with_boroughs <- st_join(airbnb_sf, nyc_boroughs, join = st_intersects)
+
+# Extract the borough name and add it to the dataframe
+# we have to add the coordinates back as well
+coords <- st_coordinates(airbnb_with_boroughs)
+
+airbnb_with_boroughs <- airbnb_with_boroughs %>%
+  mutate(
+    borough = NAME.y,
+    long = coords[, 1],
+    lat = coords[, 2]
+  ) %>%
+  st_drop_geometry()
+
+# Function to create leaflet map for a given borough
+create_borough_map <- function(data, borough_name) {
+  # Filter data for the specific borough
+  borough_data <- data %>%
+    filter(borough == borough_name)
+  
+  # Define colors for different room types
+  colors <- colorFactor(palette = "viridis", domain = borough_data$room_type)
+  
+  # Create the map
+  map <- leaflet(data) %>%
+    addProviderTiles(providers$CartoDB.Positron) %>%
+    addCircleMarkers(
+      ~long, ~lat,
+      color = ~colors(room_type),
+      stroke = FALSE,
+      fillOpacity = 0.6,
+      radius = 3,
+      popup = ~paste(
+        "<strong>Room Type:</strong>", room_type, "<br>",
+        "<strong>Price:</strong>", price, "<br>",
+        "<strong>Minimum Nights:</strong>", minimum_nights, "<br>",
+        "<strong>Service Fee:</strong>", service_fee, "<br>",
+        "<strong>Availability (365):</strong>", availability_365
+      )
+    ) %>%
+    addLegend(
+      "bottomright", pal = colors, values = ~room_type,
+      title = "Room Type",
+      opacity = 1
+    )
+  
+  return(map)
+}
+
+# List of boroughs
+boroughs <- unique(airbnb_with_boroughs$borough %>% na.omit()) 
+
+# Generate and print maps for each borough
+for (borough in boroughs) {
+  print(borough)
+  map <- create_borough_map(airbnb_with_boroughs, borough)
+  print(map)
+}
+```
+
+
+
+
+# MODELING
+
+```{r}
+set.seed(4)
+
+model_data = airbnb %>% dplyr::select(-c(service_fee,id, review_rate_number, house_rules, last_review, neighbourhood_group, NAME, cluster))
+train_indices <- createDataPartition(model_data$neighbourhood, p = 0.8, list = FALSE)
+data_for_train = model_data[train_indices, ]
+data_for_test = model_data[-train_indices, ]
+
+```
+
+```{r}
+colnames(model_data)
+```
+
+
+
+# exporting train and test so that the rest of the group can use the same train/test set for modeling
+
+```{r}
+data_for_train 
+# write.csv(data_for_train, "/Users/hannahwen/Desktop/STA141C/STA141C_FINAL_PROJECT/train_airbnb.csv", row.names = FALSE)
+```
+```{r}
+data_for_test
+# write.csv(data_for_test, "/Users/hannahwen/Desktop/STA141C/STA141C_FINAL_PROJECT/test_airbnb.csv", row.names = FALSE)
+```
+# one hot encoding
+```{r}
+dummies_model=dummyVars(price~., data = model_data)
+model_data_enc = predict(dummies_model, newdata = model_data) %>% as.data.frame()
+
+train_encoded = model_data_enc[train_indices, ]  %>% as.data.frame()
+test_encoded = model_data_enc[-train_indices, ] %>%as.data.frame()
+train_price = model_data["price"][train_indices, ]
+test_price = model_data["price"][-train_indices, ]
+```
+
+
+
+```{r}
+colnames(test_encoded)
+```
+
+
+
+# Loading Training and Testing Data 
+
+```{r}
+train_data = data_for_train
+test_data = data_for_test
+```
+
+
+```{r}
+var(test_data$price)
+
+```
+
+```{r}
+var(test_price$price)
+```
+
+
+# Linear Regression 
+
+```{r}
+set.seed(4)
+lin_reg = lm( price ~ ., data = train_data)
+sum_lin_reg = summary(lin_reg)
+```
+
+
+
+
+```{r}
+lin_pred = predict(lin_reg, newdata = test_data)
+mean( (lin_pred - test_data$price)**2)
+var(test_data$price)
+```
+```{r}
+R2(lin_pred, test_data$price)
+```
+
+# lasso 
+```{r}
+set.seed(4)
+lambda_values = 10^seq(-2, 2, by = 0.1)
+lasso = cv.glmnet(train_encoded %>% as.matrix(), train_price %>% as.matrix(), alpha = 1, lambda = lambda_values)
+```
+
+```{r}
+lasso_pred <- predict(lasso, newx = test_encoded %>% as.matrix(), s = "lambda.min")
+mean( (lasso_pred - test_price$price)**2)
+var(test_price$price)
+R2(lasso_pred, test_price$price)
+```
+
+# factorizing some columns
+```{r}
+train_data$neighbourhood = as.factor(train_data$neighbourhood)
+train_data$bedrooms = as.factor(train_data$bedrooms)
+train_data$review_rate_number_factorized = as.factor(train_data$review_rate_number_factorized)
+train_data
+
+test_data$neighbourhood = as.factor(test_data$neighbourhood)
+test_data$bedrooms = as.factor(test_data$bedrooms)
+test_data$review_rate_number_factorized = as.factor(test_data$review_rate_number_factorized)
+```
+
+
+# Random Forest
+```{r}
+set.seed(4)
+# random forest via ranger, using default mtry = p/3 = 17/3
+rf_v1 = ranger(price~., data = train_data, importance = "impurity", num.trees = 500, mtry = 5)
+summary(rf_v1)
+```
+
+```{r}
+rf_pred_v1 <- predict(rf_v1, data = test_data)
+mean((rf_pred_v1$predictions - test_data$price)**2)
+
+var(test_data$price)
+```
+```{r}
+rf_v1$prediction.error
+```
+
+
+```{r}
+mean_true = mean(test_data$price)
+R2(rf_pred_v1$predictions, test_data$price)
+```
+
+
+```{r}
+par(mar = c(5, 5, 4, 2) + 2)
+barplot(rf_v1$variable.importance, main = "Impurity-based Variable Importance",las = 2, cex.names = 0.5, 
+        names.arg = names(rf_v1$variable.importance))
+```
+
+```{r}
+set.seed(4)
+# random forest via ranger, using default mtry = p/3 = 17/3
+rf_v2 = ranger(price~., data = train_data, mtry = 17, importance = "impurity", num.trees = 500)
+summary(rf_v2)
+```
+
+```{r}
+rf_pred_v2 <- predict(rf_v2, data = test_data)
+mean((rf_pred_v2$predictions - test_data$price)**2)
+var(test_data$price)
+```
+
+
+
+```{r}
+
+R2(rf_pred_v2$predictions, test_data$price)
+```
+```{r}
+par(mar = c(5, 5, 4, 2) + 2)
+barplot(rf_v2$variable.importance, main = "Impurity-based Variable Importance",las = 2, cex.names = 0.5, 
+        names.arg = names(rf_v2$variable.importance))
+
+```
+
+```{r}
+set.seed(4)
+# random forest via ranger, using default mtry = p/3 = 17/3
+rf_v3 = ranger(price~., data = train_data, mtry = 17, importance = "impurity", num.trees = 500, min.node.size = 10)
+summary(rf_v3)
+```
+
+```{r}
+rf_pred_v3 <- predict(rf_v3, data = test_data)
+mean((rf_pred_v3$predictions - test_data$price)**2)
+var(test_data$price)
+R2(rf_pred_v3$predictions, test_data$price)
+
+```
+
+
+
+```{r}
+set.seed(4)
+rf_v4 = ranger(price~., data = train_data, mtry = 17, importance = "impurity", num.trees = 1000)
+summary(rf_v4)
+```
+
+```{r}
+rf_pred_v4 <- predict(rf_v4, data = test_data)
+mean((rf_pred_v4$predictions - test_data$price)**2)
+var(test_data$price)
+R2(rf_pred_v4$predictions, test_data$price)
+
+```
+
+```{r}
+# train mse
+rf_v4$prediction.error
+```
+
+```{r}
+par(mar = c(5, 5, 4, 2) + 2)
+barplot(rf_v4$variable.importance, main = "Impurity-based Variable Importance",las = 2, cex.names = 0.5, 
+        names.arg = names(rf_v4$variable.importance))
+```
+
+
+```{r}
+set.seed(4)
+# random forest via ranger, using default mtry = p/3 = 16/3
+rf_v5 = ranger(price~., data = train_data, mtry = 5, importance = "impurity", num.trees = 1000)
+summary(rf_v5)
+```
+
+```{r}
+rf_pred_v5 <- predict(rf_v5, data = test_data)
+mean((rf_pred_v5$predictions - test_data$price)**2)
+var(test_data$price)
+R2(rf_pred_v5$predictions, test_data$price)
+
+```
+```{r}
+rf_v5$prediction.error
+```
+
+
+# pca x random forest 
+
+
+
+```{r}
+set.seed(4)
+train_data_pca <- prcomp(train_encoded, 
+                         center = TRUE, scale. = TRUE)
+
+# Summarizing PCA results
+summary(train_data_pca)
+```
+```{r}
+# Scree plot to visualize variance explained by each principal component
+screeplot(train_data_pca, type = "lines", main = "Scree Plot")
+```
+
+
+```{r}
+set.seed(4)
+pc_scores = as.data.frame(train_data_pca$x[, 1:50])
+
+set.seed(123)  # For reproducibility
+pc_test = predict(train_data_pca, newdata = test_encoded)[, 1:50]
+price_train =model_data$price[train_indices]
+price_test = model_data$price[-train_indices]
+
+rf_pca = ranger(
+  formula = price_train ~ .,   # formula for the model
+  data = data.frame(pc_scores, price_train),  # combining predictors and response into one data frame
+  num.trees = 500,              # number of trees
+  mtry = 17,                    # number of variables tried at each split
+  verbose = TRUE                # prints the progress and other details
+)
+```
+
+
+
+```{r}
+
+pca_pred = predict(rf_pca, pc_test[, 1:50])
+mean((pca_pred$predictions-price_test)**2)
+R2(price_test, pca_pred$predictions)
+```
+```{r}
+rf_pca$prediction.error
+```
+
+
+
+# boosting with xgboost 
+```{r}
+set.seed(4)
+xg1 = xgboost(data = train_encoded %>% as.matrix(), label = train_price %>% as.matrix(), objective = "reg:squarederror", max_depth = 6, nrounds = 50, eta = 0.1)
+```
+```{r}
+xg1_pred = predict(xg1, newdata = as.matrix(test_encoded))
+mean((xg1_pred - test_price$price)^2)
+R2(xg1_pred, test_price$price)
+```
+
+
+```{r}
+set.seed(4)
+xg2 = xgboost(data = train_encoded %>% as.matrix(), label = train_price %>% as.matrix(), objective = "reg:squarederror", max_depth = 30, nrounds = 50, eta = 0.1)
+
+```
+
+
+
+```{r}
+
+xg2_pred = predict(xg2, newdata = as.matrix(test_encoded))
+mean((xg2_pred - test_price$price)^2)
+R2(xg2_pred, test_price$price)
+```
+
+```{r}
+set.seed(4)
+xg3 = xgboost(data = train_encoded %>% as.matrix(), label = train_price %>% as.matrix(), objective = "reg:squarederror", max_depth = 50, nrounds = 50, eta = 0.1)
+
+```
+```{r}
+xg3_pred = predict(xg3, newdata = as.matrix(test_encoded))
+mean((xg3_pred - test_price$price)^2)
+R2(xg3_pred, test_price$price)
+```
+
+
+```{r}
+set.seed(4)
+xg4 = xgboost(data = train_encoded %>% as.matrix(), label = train_price %>% as.matrix(), objective = "reg:squarederror", max_depth = 75, nrounds = 50, eta = 0.1)
+
+```
+```{r}
+xg4_pred = predict(xg4, newdata = as.matrix(test_encoded))
+mean((xg4_pred - test_price$price)^2)
+R2(xg4_pred, test_price$price)
+```
+
+```{r}
+set.seed(4)
+xg5 = xgboost(data = train_encoded %>% as.matrix(), label = train_price %>% as.matrix(), objective = "reg:squarederror", max_depth = 75, nrounds = 100, eta = 0.01)
+```
+```{r}
+xg5_pred = predict(xg5, newdata = as.matrix(test_encoded))
+mean((xg5_pred - test_price$price)^2)
+R2(xg5_pred, test_price$price)
+```
+
+```{r}
+set.seed(4)
+xg6 = xgboost(data = train_encoded %>% as.matrix(), label = train_price %>% as.matrix(), objective = "reg:squarederror", max_depth = 100, nrounds = 50, eta = 0.1)
+```
+```{r}
+xg6_pred = predict(xg6, newdata = as.matrix(test_encoded))
+mean((xg6_pred - test_price$price)^2)
+R2(xg6_pred, test_price$price)
+```
+```{r}
+set.seed(4)
+xg7 = xgboost(data = train_encoded %>% as.matrix(), label = train_price %>% as.matrix(), objective = "reg:squarederror", max_depth = 75, nrounds = 100, eta = 0.1)
+
+```
+
+```{r}
+set.seed(4)
+xg7_pred = predict(xg7, newdata = as.matrix(test_encoded))
+mean((xg7_pred - test_price$price)^2)
+R2(xg7_pred, test_price$price)
+```
+
+```{r}
+importance_matrix= xgb.importance(colnames(train_encoded), model = xg4)
+xgb.ggplot.importance(importance_matrix[1:15])
+```
+
