@@ -38,7 +38,7 @@ library(tidycensus)
 
 ```{r}
 # will need to change pathways for csvs. 
-listings = read_csv("/Users/hannahwen/Desktop/STA141C/STA141C_FINAL_PROJECT/Airbnb_Open_Data.csv")
+listings = read_csv("Airbnb_Open_Data.csv")
 listings
 ```
 # clean typos, remove dollar signs, fill in NA values, 
@@ -92,13 +92,13 @@ cleaner_listings
 
 ```{r}
 # write csv , I commented out all the write csvs in this RMD
-#write.csv(cleaner_listings, "/Users/hannahwen/Desktop/STA141C/STA141C_FINAL_PROJECT/cleaned_airbnb_.csv")
+#write.csv(cleaner_listings, "cleaned_airbnb_.csv")
 ```
 
 # ADDITIONAL CLEANING
 
 ```{r}
-airbnb = read_csv("/Users/hannahwen/Desktop/STA141C/STA141C_FINAL_PROJECT/STA141C_PROJECT/cleaned_airbnb_.csv")
+airbnb = read_csv("STA141C_PROJECT/cleaned_airbnb_.csv")
 airbnb
 ```
 
@@ -248,7 +248,7 @@ airbnb$bedrooms = round(airbnb$bedrooms)
 ```
 
 ```{r}
-# write.csv(airbnb, "/Users/hannahwen/Desktop/STA141C/STA141C_FINAL_PROJECT/airbnb_new.csv", row.names = FALSE)
+# write.csv(airbnb, "airbnb_new.csv", row.names = FALSE)
 airbnb
 ```
 
@@ -256,7 +256,7 @@ airbnb
 
 # data analysis portion 
 ```{r}
-airbnb = read_csv("/Users/hannahwen/Desktop/STA141C/STA141C_FINAL_PROJECT/airbnb_new.csv")
+airbnb = read_csv("airbnb_new.csv")
 airbnb
 ```
 ```{r}
@@ -718,11 +718,11 @@ colnames(model_data)
 
 ```{r}
 data_for_train 
-# write.csv(data_for_train, "/Users/hannahwen/Desktop/STA141C/STA141C_FINAL_PROJECT/train_airbnb.csv", row.names = FALSE)
+# write.csv(data_for_train, "train_airbnb.csv", row.names = FALSE)
 ```
 ```{r}
 data_for_test
-# write.csv(data_for_test, "/Users/hannahwen/Desktop/STA141C/STA141C_FINAL_PROJECT/test_airbnb.csv", row.names = FALSE)
+# write.csv(data_for_test, "test_airbnb.csv", row.names = FALSE)
 ```
 # one hot encoding
 ```{r}
